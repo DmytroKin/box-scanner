@@ -244,7 +244,9 @@ function renderTable(){
   }
   exportTxtBtn.disabled = false; exportCsvBtn.disabled = false; copyBtn.disabled = false; clearBtn.disabled = false;
   const dupCounts = countBySerial();
-  let rows = records.map((r,i)=>{
+  const order = records.map((_, i) => i).reverse();
+  let rows = order.map(i => {
+    const r = records[i];
     const isDup = dupCounts[r.serial] > 1;
     return `<tr class="${isDup?'dup':''}">
       <td>${i+1}</td>
