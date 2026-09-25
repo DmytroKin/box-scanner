@@ -71,6 +71,8 @@ tr:last-child td{border-bottom:none}
   padding:9px 16px; border-radius:4px; font-size:.82rem; opacity:0; transition:opacity .25s; pointer-events:none;
 }
 .toast.show{opacity:1}
+.fieldinput{width:100%; background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:3px; padding:9px; font-family:inherit; font-size:.95rem; resize:vertical}
+.altrow{display:flex; gap:10px; margin-top:8px; flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -85,9 +87,30 @@ tr:last-child td{border-bottom:none}
     <div class="step-value" id="stageValue">Натисни «Сканувати», щоб зчитати перший штрихкод</div>
     <div id="reader"></div>
     <div class="btnrow">
-      <button class="primary" id="scanBtn">Сканувати</button>
+      <button class="primary" id="scanBtn">Сканувати ШК</button>
       <button class="ghost" id="cancelBtn" style="display:none">Скасувати</button>
       <button class="ghost" id="resetPairBtn" style="display:none">Почати пару заново</button>
+    </div>
+    <div class="altrow" id="altRow1">
+      <button class="ghost" id="ocrBtn">📷 Фото → розпізнати текст</button>
+      <button class="ghost" id="manualBtn">Ввести вручну</button>
+      <input type="file" id="ocrInput" accept="image/*" capture="environment" style="display:none">
+    </div>
+    <div class="stage" id="ocrPanel" style="display:none; margin-top:12px; margin-bottom:0">
+      <div class="step-label">Розпізнаний текст (перевір і відредагуй)</div>
+      <textarea class="fieldinput" id="ocrText" rows="2"></textarea>
+      <div class="btnrow">
+        <button class="primary" id="ocrConfirmBtn">Використати</button>
+        <button class="ghost" id="ocrRetryBtn">Спробувати ще фото</button>
+      </div>
+    </div>
+    <div class="stage" id="manualPanel" style="display:none; margin-top:12px; margin-bottom:0">
+      <div class="step-label">Введи назву/модель вручну</div>
+      <input class="fieldinput" type="text" id="manualText">
+      <div class="btnrow">
+        <button class="primary" id="manualConfirmBtn">Використати</button>
+        <button class="ghost" id="manualCancelBtn">Скасувати</button>
+      </div>
     </div>
   </div>
 
@@ -105,6 +128,7 @@ tr:last-child td{border-bottom:none}
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 let records = [];
 let pending = { nameModel: null };
@@ -123,6 +147,18 @@ const exportBtn = document.getElementById('exportBtn');
 const copyBtn = document.getElementById('copyBtn');
 const clearBtn = document.getElementById('clearBtn');
 const toast = document.getElementById('toast');
+const altRow1 = document.getElementById('altRow1');
+const ocrBtn = document.getElementById('ocrBtn');
+const ocrInput = document.getElementById('ocrInput');
+const ocrPanel = document.getElementById('ocrPanel');
+const ocrText = document.getElementById('ocrText');
+const ocrConfirmBtn = document.getElementById('ocrConfirmBtn');
+const ocrRetryBtn = document.getElementById('ocrRetryBtn');
+const manualBtn = document.getElementById('manualBtn');
+const manualPanel = document.getElementById('manualPanel');
+const manualText = document.getElementById('manualText');
+const manualConfirmBtn = document.getElementById('manualConfirmBtn');
+const manualCancelBtn = document.getElementById('manualCancelBtn');
 
 function showToast(msg){
   toast.textContent = msg;
@@ -133,12 +169,16 @@ function showToast(msg){
 function updateStageUI(){
   if(pending.nameModel === null){
     stageLabel.textContent = 'Крок 1 з 2';
-    stageValue.innerHTML = '<span class="empty">Натисни «Сканувати», щоб зчитати ШК назви/моделі</span>';
+    stageValue.innerHTML = '<span class="empty">Скануй ШК назви/моделі, або сфотографуй текст, або введи вручну</span>';
     resetPairBtn.style.display = 'none';
+    altRow1.style.display = 'flex';
   } else {
-    stageLabel.textContent = 'Крок 2 з 2';
+    stageLabel.textContent = 'Крок 2 з 2 — скануй серійний номер';
     stageValue.textContent = 'Модель: ' + pending.nameModel;
     resetPairBtn.style.display = 'inline-block';
+    altRow1.style.display = 'none';
+    ocrPanel.style.display = 'none';
+    manualPanel.style.display = 'none';
   }
 }
 
@@ -213,6 +253,54 @@ async function onScanSuccess(decodedText){
 scanBtn.addEventListener('click', startScan);
 cancelBtn.addEventListener('click', stopScan);
 resetPairBtn.addEventListener('click', ()=>{ pending.nameModel = null; updateStageUI(); });
+
+ocrBtn.addEventListener('click', ()=>{ ocrInput.value=''; ocrInput.click(); });
+
+ocrInput.addEventListener('change', async ()=>{
+  const file = ocrInput.files[0];
+  if(!file) return;
+  showToast('Розпізнаю текст…');
+  ocrBtn.disabled = true; manualBtn.disabled = true;
+  try{
+    const { data } = await Tesseract.recognize(file, 'eng+ukr');
+    const cleaned = (data.text || '').replace(/\s+/g,' ').trim();
+    ocrText.value = cleaned;
+    ocrPanel.style.display = 'block';
+    manualPanel.style.display = 'none';
+  }catch(e){
+    showToast('Не вдалось розпізнати текст');
+  }
+  ocrBtn.disabled = false; manualBtn.disabled = false;
+});
+
+ocrConfirmBtn.addEventListener('click', ()=>{
+  const val = ocrText.value.trim();
+  if(!val){ showToast('Текст порожній'); return; }
+  pending.nameModel = val;
+  ocrPanel.style.display = 'none';
+  updateStageUI();
+  showToast('Модель встановлено');
+});
+
+ocrRetryBtn.addEventListener('click', ()=>{ ocrPanel.style.display='none'; ocrInput.value=''; ocrInput.click(); });
+
+manualBtn.addEventListener('click', ()=>{
+  manualPanel.style.display = 'block';
+  ocrPanel.style.display = 'none';
+  manualText.value = '';
+  manualText.focus();
+});
+
+manualConfirmBtn.addEventListener('click', ()=>{
+  const val = manualText.value.trim();
+  if(!val){ showToast('Введи текст'); return; }
+  pending.nameModel = val;
+  manualPanel.style.display = 'none';
+  updateStageUI();
+  showToast('Модель встановлено');
+});
+
+manualCancelBtn.addEventListener('click', ()=>{ manualPanel.style.display = 'none'; });
 
 exportBtn.addEventListener('click', ()=>{
   const text = buildText();
