@@ -96,6 +96,10 @@ tr:last-child td{border-bottom:none}
       <button class="ghost" id="manualBtn">Ввести вручну</button>
       <input type="file" id="ocrInput" accept="image/*" capture="environment" style="display:none">
     </div>
+    <div class="step-label" id="ocrLoadingLabel" style="display:none; margin-top:10px">Готую фото…</div>
+    <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:.82rem; color:var(--muted)">
+      <input type="checkbox" id="lockModelChk"> Однакова модель для наступних коробок
+    </label>
     <div class="stage" id="ocrPanel" style="display:none; margin-top:12px; margin-bottom:0">
       <div class="step-label">Розпізнаний текст (перевір і відредагуй)</div>
       <textarea class="fieldinput" id="ocrText" rows="2"></textarea>
@@ -151,6 +155,7 @@ const altRow1 = document.getElementById('altRow1');
 const ocrBtn = document.getElementById('ocrBtn');
 const ocrInput = document.getElementById('ocrInput');
 const ocrPanel = document.getElementById('ocrPanel');
+const ocrLoadingLabel = document.getElementById('ocrLoadingLabel');
 const ocrText = document.getElementById('ocrText');
 const ocrConfirmBtn = document.getElementById('ocrConfirmBtn');
 const ocrRetryBtn = document.getElementById('ocrRetryBtn');
@@ -159,6 +164,7 @@ const manualPanel = document.getElementById('manualPanel');
 const manualText = document.getElementById('manualText');
 const manualConfirmBtn = document.getElementById('manualConfirmBtn');
 const manualCancelBtn = document.getElementById('manualCancelBtn');
+const lockModelChk = document.getElementById('lockModelChk');
 
 function showToast(msg){
   toast.textContent = msg;
@@ -174,11 +180,12 @@ function updateStageUI(){
     altRow1.style.display = 'flex';
   } else {
     stageLabel.textContent = 'Крок 2 з 2 — скануй серійний номер';
-    stageValue.textContent = 'Модель: ' + pending.nameModel;
+    stageValue.textContent = (lockModelChk.checked ? 'Модель (зафіксована): ' : 'Модель: ') + pending.nameModel;
     resetPairBtn.style.display = 'inline-block';
     altRow1.style.display = 'none';
     ocrPanel.style.display = 'none';
     manualPanel.style.display = 'none';
+    ocrLoadingLabel.style.display = 'none';
   }
 }
 
@@ -244,7 +251,9 @@ async function onScanSuccess(decodedText){
   } else {
     records.push({ nameModel: pending.nameModel, serial: decodedText });
     showToast('Коробку додано');
-    pending.nameModel = null;
+    if(!lockModelChk.checked){
+      pending.nameModel = null;
+    }
     renderTable();
   }
   updateStageUI();
@@ -254,22 +263,66 @@ scanBtn.addEventListener('click', startScan);
 cancelBtn.addEventListener('click', stopScan);
 resetPairBtn.addEventListener('click', ()=>{ pending.nameModel = null; updateStageUI(); });
 
+function downscaleImage(file, maxDim){
+  maxDim = maxDim || 1500;
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = ()=>{
+      let { width, height } = img;
+      if(width > maxDim || height > maxDim){
+        const scale = maxDim / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.toBlob(blob=>{ URL.revokeObjectURL(url); blob ? resolve(blob) : reject(new Error('canvas failed')); }, 'image/jpeg', 0.85);
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('image load failed')); };
+    img.src = url;
+  });
+}
+
+function translateOcrStatus(status){
+  const map = {
+    'loading tesseract core': 'Завантажую движок',
+    'initializing tesseract': 'Ініціалізую',
+    'loading language traineddata': 'Завантажую мову (перший раз довше)',
+    'initializing api': 'Готую',
+    'recognizing text': 'Розпізнаю текст'
+  };
+  return map[status] || status;
+}
+
 ocrBtn.addEventListener('click', ()=>{ ocrInput.value=''; ocrInput.click(); });
 
 ocrInput.addEventListener('change', async ()=>{
   const file = ocrInput.files[0];
   if(!file) return;
-  showToast('Розпізнаю текст…');
   ocrBtn.disabled = true; manualBtn.disabled = true;
+  ocrLoadingLabel.style.display = 'block';
+  ocrLoadingLabel.textContent = 'Готую фото…';
   try{
-    const { data } = await Tesseract.recognize(file, 'eng+ukr');
+    const small = await downscaleImage(file);
+    const { data } = await Tesseract.recognize(small, 'eng+ukr', {
+      logger: m => {
+        if(m && m.status){
+          const pct = typeof m.progress === 'number' ? ' ' + Math.round(m.progress*100) + '%' : '';
+          ocrLoadingLabel.textContent = translateOcrStatus(m.status) + pct;
+        }
+      }
+    });
     const cleaned = (data.text || '').replace(/\s+/g,' ').trim();
     ocrText.value = cleaned;
     ocrPanel.style.display = 'block';
     manualPanel.style.display = 'none';
+    if(!cleaned) showToast('Текст не знайдено — спробуй чіткіше фото');
   }catch(e){
-    showToast('Не вдалось розпізнати текст');
+    showToast('Не вдалось розпізнати текст: ' + (e && e.message ? e.message : e));
   }
+  ocrLoadingLabel.style.display = 'none';
   ocrBtn.disabled = false; manualBtn.disabled = false;
 });
 
