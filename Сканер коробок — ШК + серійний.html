@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Сканер коробок</title>
+<style>
+:root{
+  --bg:#12161c; --panel:#1b212a; --panel2:#232b36; --line:#2d3746;
+  --amber:#e8a33d; --amber-dim:#8a6425; --green:#5fbf7a; --text:#e6e9ee; --muted:#8a94a3;
+  padding-top: env(safe-area-inset-top,0px); padding-bottom: env(safe-area-inset-bottom,0px);
+  box-sizing:border-box;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f2f0ea; --panel:#fff; --panel2:#f7f5ef; --line:#ddd6c8;
+    --amber:#b5761f; --amber-dim:#e6d3ac; --green:#2f8a4f; --text:#1c1c1a; --muted:#6b675c;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:'Courier New',ui-monospace,monospace;
+  display:flex; flex-direction:column; min-height:100%;
+}
+header{
+  padding:16px 18px 10px; border-bottom:1px solid var(--line);
+  position:sticky; top:0; background:var(--bg); z-index:5;
+  padding-top: calc(16px + env(safe-area-inset-top,0px));
+}
+h1{margin:0; font-size:1.15rem; letter-spacing:.02em; font-weight:700}
+.sub{color:var(--muted); font-size:.8rem; margin-top:4px}
+main{flex:1; padding:14px 18px 24px; max-width:640px; width:100%; margin:0 auto}
+
+.stage{
+  background:var(--panel); border:1px solid var(--line); border-radius:4px;
+  padding:14px; margin-bottom:14px;
+}
+.step-label{font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px}
+.step-value{font-size:1.05rem; word-break:break-all}
+.step-value.empty{color:var(--muted); font-style:italic}
+
+#reader{width:100%; border-radius:4px; overflow:hidden; border:1px solid var(--line); background:#000; display:none}
+#reader.active{display:block}
+
+.btnrow{display:flex; gap:10px; margin-top:12px; flex-wrap:wrap}
+button{
+  font-family:inherit; font-size:.9rem; padding:11px 16px; border-radius:3px;
+  border:1px solid var(--line); background:var(--panel2); color:var(--text); cursor:pointer;
+}
+button.primary{background:var(--amber-dim); border-color:var(--amber); color:var(--text)}
+button.primary:hover{filter:brightness(1.1)}
+button:disabled{opacity:.4; cursor:default}
+button.ghost{background:transparent}
+
+table{width:100%; border-collapse:collapse; font-size:.82rem}
+th,td{padding:7px 8px; border-bottom:1px solid var(--line); text-align:left; word-break:break-word}
+th{color:var(--muted); font-weight:600; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em}
+tr:last-child td{border-bottom:none}
+.empty-state{color:var(--muted); font-size:.85rem; padding:8px 0}
+
+.count-badge{
+  display:inline-block; background:var(--green); color:#0c1a10; font-weight:700;
+  border-radius:3px; padding:2px 8px; font-size:.78rem; margin-left:6px;
+}
+.footer-actions{display:flex; gap:10px; margin-top:14px; flex-wrap:wrap}
+.toast{
+  position:fixed; bottom:calc(18px + env(safe-area-inset-bottom,0px)); left:50%; transform:translateX(-50%);
+  background:var(--panel2); border:1px solid var(--amber); color:var(--text);
+  padding:9px 16px; border-radius:4px; font-size:.82rem; opacity:0; transition:opacity .25s; pointer-events:none;
+}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>Сканер коробок</h1>
+  <div class="sub">ШК1 → назва/модель · ШК2 → серійний номер</div>
+</header>
+
+<main>
+  <div class="stage">
+    <div class="step-label" id="stageLabel">Крок 1 з 2</div>
+    <div class="step-value" id="stageValue">Натисни «Сканувати», щоб зчитати перший штрихкод</div>
+    <div id="reader"></div>
+    <div class="btnrow">
+      <button class="primary" id="scanBtn">Сканувати</button>
+      <button class="ghost" id="cancelBtn" style="display:none">Скасувати</button>
+      <button class="ghost" id="resetPairBtn" style="display:none">Почати пару заново</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="step-label">Відскановані коробки <span class="count-badge" id="countBadge">0</span></div>
+    <div id="tableWrap"><div class="empty-state">Поки що порожньо</div></div>
+    <div class="footer-actions">
+      <button id="exportBtn" disabled>Завантажити .txt</button>
+      <button id="copyBtn" disabled>Копіювати (для Teams)</button>
+      <button class="ghost" id="clearBtn" disabled>Очистити все</button>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+let records = [];
+let pending = { nameModel: null };
+let html5Qr = null;
+let scanning = false;
+
+const stageLabel = document.getElementById('stageLabel');
+const stageValue = document.getElementById('stageValue');
+const scanBtn = document.getElementById('scanBtn');
+const cancelBtn = document.getElementById('cancelBtn');
+const resetPairBtn = document.getElementById('resetPairBtn');
+const readerEl = document.getElementById('reader');
+const tableWrap = document.getElementById('tableWrap');
+const countBadge = document.getElementById('countBadge');
+const exportBtn = document.getElementById('exportBtn');
+const copyBtn = document.getElementById('copyBtn');
+const clearBtn = document.getElementById('clearBtn');
+const toast = document.getElementById('toast');
+
+function showToast(msg){
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(()=>toast.classList.remove('show'), 1800);
+}
+
+function updateStageUI(){
+  if(pending.nameModel === null){
+    stageLabel.textContent = 'Крок 1 з 2';
+    stageValue.innerHTML = '<span class="empty">Натисни «Сканувати», щоб зчитати ШК назви/моделі</span>';
+    resetPairBtn.style.display = 'none';
+  } else {
+    stageLabel.textContent = 'Крок 2 з 2';
+    stageValue.textContent = 'Модель: ' + pending.nameModel;
+    resetPairBtn.style.display = 'inline-block';
+  }
+}
+
+function renderTable(){
+  countBadge.textContent = records.length;
+  if(records.length === 0){
+    tableWrap.innerHTML = '<div class="empty-state">Поки що порожньо</div>';
+    exportBtn.disabled = true; copyBtn.disabled = true; clearBtn.disabled = true;
+    return;
+  }
+  exportBtn.disabled = false; copyBtn.disabled = false; clearBtn.disabled = false;
+  let rows = records.map((r,i)=>
+    `<tr><td>${i+1}</td><td>${escapeHtml(r.nameModel)}</td><td>${escapeHtml(r.serial)}</td></tr>`
+  ).join('');
+  tableWrap.innerHTML = `<table><thead><tr><th>#</th><th>Назва/модель</th><th>Серійний №</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function escapeHtml(s){
+  const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+}
+
+function buildText(){
+  return records.map(r => `${r.nameModel}\t${r.serial}`).join('\n');
+}
+
+async function startScan(){
+  if(scanning) return;
+  scanning = true;
+  readerEl.classList.add('active');
+  scanBtn.style.display = 'none';
+  cancelBtn.style.display = 'inline-block';
+  html5Qr = new Html5Qrcode('reader');
+  try{
+    await html5Qr.start(
+      { facingMode: 'environment' },
+      { fps: 12, qrbox: { width: 260, height: 140 } },
+      onScanSuccess,
+      ()=>{}
+    );
+  }catch(e){
+    showToast('Немає доступу до камери: ' + e);
+    stopScan();
+  }
+}
+
+async function stopScan(){
+  scanning = false;
+  readerEl.classList.remove('active');
+  scanBtn.style.display = 'inline-block';
+  cancelBtn.style.display = 'none';
+  if(html5Qr){
+    try{ await html5Qr.stop(); html5Qr.clear(); }catch(e){}
+    html5Qr = null;
+  }
+}
+
+async function onScanSuccess(decodedText){
+  await stopScan();
+  if(navigator.vibrate) navigator.vibrate(80);
+  if(pending.nameModel === null){
+    pending.nameModel = decodedText;
+    showToast('Зчитано модель');
+  } else {
+    records.push({ nameModel: pending.nameModel, serial: decodedText });
+    showToast('Коробку додано');
+    pending.nameModel = null;
+    renderTable();
+  }
+  updateStageUI();
+}
+
+scanBtn.addEventListener('click', startScan);
+cancelBtn.addEventListener('click', stopScan);
+resetPairBtn.addEventListener('click', ()=>{ pending.nameModel = null; updateStageUI(); });
+
+exportBtn.addEventListener('click', ()=>{
+  const text = buildText();
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  a.href = url;
+  a.download = `koroby-${ts}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+copyBtn.addEventListener('click', async ()=>{
+  const text = buildText();
+  try{
+    await navigator.clipboard.writeText(text);
+    showToast('Скопійовано — встав у Teams');
+  }catch(e){
+    showToast('Не вдалось скопіювати автоматично');
+  }
+});
+
+clearBtn.addEventListener('click', ()=>{
+  if(confirm('Очистити весь список?')){
+    records = [];
+    renderTable();
+  }
+});
+
+updateStageUI();
+renderTable();
+</script>
+</body>
+</html>
