@@ -320,7 +320,7 @@ async function startScan(){
   try{
     await html5Qr.start(
       { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 280, height: 170 } },
+      { fps: 8, qrbox: { width: 280, height: 170 } },
       onScanSuccess,
       ()=>{}
     );
@@ -343,16 +343,19 @@ async function stopScan(){
 
 function onScanSuccess(decodedText){
   const now = Date.now();
-  // ігноруємо перші кадри після старту камери (автофокус ще не встановився)
-  if(now - scanStartedAt < 400) return;
-  // вимагаємо 2 однакових покази поспіль, щоб відсіяти випадкові/часткові зчитування
+  const elapsed = now - scanStartedAt;
+  // ігноруємо перші 900мс після старту камери (автофокус ще не встановився)
+  if(elapsed < 900) return;
+  // вимагаємо 3 однакових покази поспіль, щоб відсіяти випадкові/часткові зчитування
   if(candidate.value === decodedText){
     candidate.count++;
   } else {
     candidate = { value: decodedText, count: 1 };
     return;
   }
-  if(candidate.count < 2) return;
+  if(candidate.count < 3) return;
+  // мінімальна тривалість активного сканування перш ніж щось приймається
+  if(elapsed < 1200) return;
   // захист від повторного миттєвого спрацювання того самого коду
   if(lastAccepted.value === decodedText && (now - lastAccepted.at) < 2500) return;
 
