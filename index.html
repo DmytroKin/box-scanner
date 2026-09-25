@@ -97,7 +97,7 @@ tr:last-child td{border-bottom:none}
       <input type="file" id="ocrInput" accept="image/*" style="display:none">
     </div>
     <div class="step-label" id="ocrLoadingLabel" style="display:none; margin-top:10px">Готую фото…</div>
-    <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:.82rem; color:var(--muted)">
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:12px;font-size:.82rem;color:var(--muted)">
       <input type="checkbox" id="lockModelChk"> Однакова модель для наступних коробок
     </label>
     <div class="stage" id="ocrPanel" style="display:none; margin-top:12px; margin-bottom:0">
@@ -138,6 +138,7 @@ let records = [];
 let pending = { nameModel: null };
 let html5Qr = null;
 let scanning = false;
+let scanCandidate = ''; let scanTimer = null; let pendingScan = null;
 
 const stageLabel = document.getElementById('stageLabel');
 const stageValue = document.getElementById('stageValue');
@@ -165,6 +166,11 @@ const manualText = document.getElementById('manualText');
 const manualConfirmBtn = document.getElementById('manualConfirmBtn');
 const manualCancelBtn = document.getElementById('manualCancelBtn');
 const lockModelChk = document.getElementById('lockModelChk');
+const scanDelay = document.getElementById('scanDelay');
+const scanConfirmPanel = document.getElementById('scanConfirmPanel');
+const detectedCode = document.getElementById('detectedCode');
+const acceptScanBtn = document.getElementById('acceptScanBtn');
+const rejectScanBtn = document.getElementById('rejectScanBtn');
 
 function showToast(msg){
   toast.textContent = msg;
@@ -198,9 +204,9 @@ function renderTable(){
   }
   exportBtn.disabled = false; copyBtn.disabled = false; clearBtn.disabled = false;
   let rows = records.map((r,i)=>
-    `<tr><td>${i+1}</td><td>${escapeHtml(r.nameModel)}</td><td>${escapeHtml(r.serial)}</td></tr>`
+    `<tr><td>${i+1}</td><td>${escapeHtml(r.nameModel)}</td><td>${escapeHtml(r.serial)}</td><td><button class="ghost" data-del="${i}">×</button></td></tr>`
   ).join('');
-  tableWrap.innerHTML = `<table><thead><tr><th>#</th><th>Назва/модель</th><th>Серійний №</th></tr></thead><tbody>${rows}</tbody></table>`;
+  tableWrap.innerHTML = `<table><thead><tr><th>#</th><th>Назва/модель</th><th>Серійний №</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function escapeHtml(s){
@@ -232,7 +238,7 @@ async function startScan(){
 }
 
 async function stopScan(){
-  scanning = false;
+  scanning = false; clearTimeout(scanTimer); scanCandidate=''; pendingScan=null; scanConfirmPanel.style.display='none';
   readerEl.classList.remove('active');
   scanBtn.style.display = 'inline-block';
   cancelBtn.style.display = 'none';
@@ -243,22 +249,20 @@ async function stopScan(){
 }
 
 async function onScanSuccess(decodedText){
-  await stopScan();
-  if(navigator.vibrate) navigator.vibrate(80);
-  if(pending.nameModel === null){
-    pending.nameModel = decodedText;
-    showToast('Зчитано модель');
-  } else {
-    records.push({ nameModel: pending.nameModel, serial: decodedText });
-    showToast('Коробку додано');
-    if(!lockModelChk.checked){
-      pending.nameModel = null;
-    }
-    renderTable();
-  }
-  updateStageUI();
+  decodedText=String(decodedText).trim(); if(!decodedText)return;
+  if(scanCandidate===decodedText)return;
+  scanCandidate=decodedText; clearTimeout(scanTimer);
+  scanTimer=setTimeout(()=>{
+    if(scanCandidate!==decodedText)return;
+    if(pending.nameModel===null){ pending.nameModel=decodedText; if(navigator.vibrate)navigator.vibrate(80); showToast('Зчитано модель'); stopScan(); updateStageUI(); return; }
+    pendingScan=decodedText; detectedCode.textContent=decodedText; scanConfirmPanel.style.display='block';
+    if(navigator.vibrate)navigator.vibrate(35);
+  },Math.max(0,Number(scanDelay.value)||0));
 }
 
+acceptScanBtn.addEventListener('click',()=>{ if(!pendingScan)return; const v=pendingScan; pendingScan=null; scanConfirmPanel.style.display='none'; records.push({nameModel:pending.nameModel,serial:v}); showToast('Коробку додано'); if(!lockModelChk.checked)pending.nameModel=null; renderTable(); updateStageUI(); });
+rejectScanBtn.addEventListener('click',()=>{pendingScan=null;scanCandidate='';scanConfirmPanel.style.display='none';showToast('Скан відхилено')});
+tableWrap.addEventListener('click',e=>{const b=e.target.closest('[data-del]');if(b){const i=Number(b.dataset.del);if(confirm('Видалити цей рядок?')){records.splice(i,1);renderTable();}}});
 scanBtn.addEventListener('click', startScan);
 cancelBtn.addEventListener('click', stopScan);
 resetPairBtn.addEventListener('click', ()=>{ pending.nameModel = null; updateStageUI(); });
