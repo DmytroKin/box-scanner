@@ -113,6 +113,10 @@ body{min-height:100dvh}
 tr.found td{background:var(--green-dim)}
 #invTableWrap{overflow-x:auto}
 table.wide th, table.wide td{white-space:nowrap}
+#invTableWrap{--inv-scale:1}
+#invTableWrap table{font-size:calc(.8rem * var(--inv-scale))}
+#invTableWrap th, #invTableWrap td{padding:calc(7px * var(--inv-scale)) calc(6px * var(--inv-scale))}
+#invTableWrap button.icon{font-size:calc(.8rem * var(--inv-scale)); padding:calc(5px * var(--inv-scale)) calc(8px * var(--inv-scale))}
 .modebar{display:flex; gap:8px; margin-top:10px}
 .modebar button{padding:7px 12px; font-size:.82rem}
 .maprow{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px}
@@ -234,6 +238,12 @@ body[data-mode="inventory"] #collectList{display:none !important}
       <input type="checkbox" id="invAllCols" checked> Показувати всі колонки з файлу
     </label>
 
+    <div class="altrow" style="align-items:center; margin-top:10px">
+      <button class="ghost icon" id="invZoomOut" title="Зменшити таблицю">➖</button>
+      <span id="invZoomLabel" style="font-size:.8rem; min-width:3.2em; text-align:center">100%</span>
+      <button class="ghost icon" id="invZoomIn" title="Збільшити таблицю">➕</button>
+      <button class="ghost icon" id="invZoomFit" title="Вмістити таблицю по ширині">↔ Вмістити</button>
+    </div>
     <div id="invTableWrap" style="margin-top:10px"></div>
     <div id="invExtraWrap"></div>
 
@@ -1000,6 +1010,35 @@ invFilterBtns.forEach(b => b.addEventListener('click', ()=>{
 
 invSearch.addEventListener('input', ()=>{ invQuery = invSearch.value; renderInv(); });
 invAllCols.addEventListener('change', renderInv);
+
+// --- масштаб таблиці ---
+const INV_SCALE_KEY = 'boxScannerInvScale_v1';
+const invZoomIn = document.getElementById('invZoomIn');
+const invZoomOut = document.getElementById('invZoomOut');
+const invZoomFit = document.getElementById('invZoomFit');
+const invZoomLabel = document.getElementById('invZoomLabel');
+let invScale = 1;
+try{ const s = parseFloat(localStorage.getItem(INV_SCALE_KEY)); if(s >= 0.25 && s <= 2) invScale = s; }catch(e){}
+
+function setInvScale(v){
+  invScale = Math.min(2, Math.max(0.25, v));
+  invTableWrap.style.setProperty('--inv-scale', String(invScale));
+  invZoomLabel.textContent = Math.round(invScale * 100) + '%';
+  try{ localStorage.setItem(INV_SCALE_KEY, String(invScale)); }catch(e){}
+}
+
+invZoomIn.addEventListener('click', ()=> setInvScale(invScale * 1.2));
+invZoomOut.addEventListener('click', ()=> setInvScale(invScale / 1.2));
+invZoomFit.addEventListener('click', ()=>{
+  const t = invTableWrap.querySelector('table');
+  if(!t) return;
+  for(let n = 0; n < 3; n++){
+    const w = invTableWrap.clientWidth, tw = t.scrollWidth;
+    if(!tw || Math.abs(tw - w) < 4) break;
+    setInvScale(invScale * (w / tw));
+  }
+});
+setInvScale(invScale);
 
 // --- звіт, копіювання, скидання ---
 invExportBtn.addEventListener('click', ()=>{
