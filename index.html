@@ -111,6 +111,8 @@ body{min-height:100dvh}
 :root{--green-dim:#1f3d2b}
 @media (prefers-color-scheme: light){ :root:not([data-theme="dark"]){--green-dim:#d7efdf} }
 tr.found td{background:var(--green-dim)}
+#invTableWrap{overflow-x:auto}
+table.wide th, table.wide td{white-space:nowrap}
 .modebar{display:flex; gap:8px; margin-top:10px}
 .modebar button{padding:7px 12px; font-size:.82rem}
 .maprow{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px}
@@ -228,6 +230,9 @@ body[data-mode="inventory"] #collectList{display:none !important}
       <button class="ghost icon" data-invfilter="found">Знайдені</button>
     </div>
     <input class="fieldinput" id="invSearch" type="search" placeholder="Пошук у списку" style="margin-top:10px">
+    <label style="display:flex; align-items:center; gap:8px; margin-top:10px; font-size:.82rem; color:var(--muted)">
+      <input type="checkbox" id="invAllCols" checked> Показувати всі колонки з файлу
+    </label>
 
     <div id="invTableWrap" style="margin-top:10px"></div>
     <div id="invExtraWrap"></div>
@@ -724,6 +729,7 @@ const mapApplyBtn = document.getElementById('mapApplyBtn');
 const mapCancelBtn = document.getElementById('mapCancelBtn');
 const invContinuous = document.getElementById('invContinuous');
 const invSearch = document.getElementById('invSearch');
+const invAllCols = document.getElementById('invAllCols');
 const invBadge = document.getElementById('invBadge');
 const invTableWrap = document.getElementById('invTableWrap');
 const invExtraWrap = document.getElementById('invExtraWrap');
@@ -735,7 +741,7 @@ const invFilterBtns = document.querySelectorAll('[data-invfilter]');
 
 // ключ для порівняння: регістр не важливий, провідні нулі ігноруються для чисел (UPC-A / EAN-13 тощо)
 function invKey(s){
-  const t = String(s == null ? '' : s).trim().toUpperCase();
+  const t = String(s == null ? '' : s).trim().toUpperCase().replace(/[\s\-_.\/]/g, '');
   return /^\d+$/.test(t) ? (t.replace(/^0+/, '') || '0') : t;
 }
 
@@ -749,7 +755,7 @@ function loadInv(){
     const raw = localStorage.getItem(INV_KEY);
     if(raw){
       const p = JSON.parse(raw);
-      if(p && Array.isArray(p.items)) inv = { items: p.items, extras: Array.isArray(p.extras) ? p.extras : [] };
+      if(p && Array.isArray(p.items)) inv = { items: p.items, extras: Array.isArray(p.extras) ? p.extras : [], headers: Array.isArray(p.headers) ? p.headers : null };
     }
   }catch(e){}
 }
@@ -818,19 +824,22 @@ mapApplyBtn.addEventListener('click', ()=>{
   const iN = parseInt(mapName.value, 10);
   const iB = parseInt(mapBarcode.value, 10);
   const iS = parseInt(mapSerial.value, 10);
-  if(iB < 0 && iS < 0){ showToast('Обери колонку зі штрихкодом або серійним номером'); return; }
+  if(iN < 0 && iB < 0 && iS < 0){ showToast('Обери хоча б одну колонку'); return; }
   const cell = (r, i) => (i < 0 || r[i] == null) ? '' : String(r[i]).trim();
   const items = [];
   let skipped = 0;
   invParsed.rows.forEach(r => {
-    const it = { name: cell(r, iN), barcode: cell(r, iB), serial: cell(r, iS), found: false, at: null };
-    if(!it.barcode && !it.serial){ skipped++; return; }
+    const row = r.map(c => (c == null ? '' : String(c).trim()));
+    const it = { name: cell(r, iN), barcode: cell(r, iB), serial: cell(r, iS), row, found: false, at: null };
+    // рядок потрібен, якщо в ньому є хоч якийсь код (без пробілів, від 5 символів)
+    if(!it.barcode && !it.serial && !row.some(c => /^\S{5,}$/.test(c))){ skipped++; return; }
     items.push(it);
   });
-  if(!items.length){ showToast('Немає рядків зі штрихкодом чи серійним номером'); return; }
+  if(!items.length){ showToast('У файлі не знайдено рядків з кодами'); return; }
   if(inv.items.length && !confirm(`Замінити поточний список (${inv.items.length} поз.) новим (${items.length} поз.)?`)) return;
-  inv = { items, extras: [] };
+  inv = { items, extras: [], headers: invParsed.headers };
   invLast = '';
+  invQuery = ''; invSearch.value = '';
   saveInv();
   invMapBox.style.display = 'none';
   invParsed = null;
@@ -838,6 +847,12 @@ mapApplyBtn.addEventListener('click', ()=>{
   updateStageUI();
   showToast(`Завантажено ${items.length} поз.` + (skipped ? ` (пропущено ${skipped} без ШК/серійного)` : ''));
 });
+
+function invItemHas(it, k){
+  if(it.serial && invKey(it.serial) === k) return true;
+  if(it.barcode && invKey(it.barcode) === k) return true;
+  return Array.isArray(it.row) && it.row.some(c => c && invKey(c) === k);
+}
 
 // --- пошук збігу ---
 function invMatch(code){
@@ -847,8 +862,22 @@ function invMatch(code){
   if(idx !== -1) return { idx, how: 'serial' };
   // 2) штрихкод
   const same = [];
-  inv.items.forEach((it, i) => { if(it.barcode && invKey(it.barcode) === k) same.push(i); });
-  if(same.length === 0) return { idx: -1 };
+  inv.items.forEach((it, i) => { if(invItemHas(it, k)) same.push(i); });
+  if(same.length === 0){
+    // 3) частковий збіг: код з наліпки містить код з файлу (або навпаки); лише «коди» без пробілів від 6 символів
+    const part = [];
+    inv.items.forEach((it, i) => {
+      const cells = (it.row && it.row.length) ? it.row : [it.barcode, it.serial];
+      const hit = cells.some(c => {
+        if(!c || !/^\S{6,}$/.test(c)) return false;
+        const kc = invKey(c);
+        return kc.length >= 6 && k.length >= 6 && (kc.includes(k) || k.includes(kc));
+      });
+      if(hit) part.push(i);
+    });
+    if(part.length === 1) return { idx: part[0], how: 'partial' };
+    return { idx: -1 };
+  }
   if(same.length === 1) return { idx: same[0], how: 'barcode' };
   // кілька позицій з однаковим ШК = це ШК моделі: відмічаємо вільну позицію без серійного
   const free = same.find(i => !inv.items[i].found && !inv.items[i].serial);
@@ -876,7 +905,7 @@ function handleInventoryScan(code){
   }
   const it = inv.items[m.idx];
   const label = it.name || it.serial || it.barcode;
-  if(it.found && (m.how === 'serial' || m.allDone || m.how === 'barcode')){
+  if(it.found){
     showToast('Вже відмічено: ' + label);
     return;
   }
@@ -885,8 +914,8 @@ function handleInventoryScan(code){
   saveInv();
   playBeep(880);
   if(navigator.vibrate) navigator.vibrate(80);
-  invLast = '✅ ' + label;
-  showToast('✅ ' + label);
+  invLast = '✅ ' + label + (m.how === 'partial' ? ' (частковий збіг)' : '');
+  showToast(invLast);
   renderInv(); updateStageUI();
 }
 
@@ -915,24 +944,38 @@ function renderInv(){
   let list = inv.items.map((it, i) => ({ it, i }));
   if(invFilter === 'found') list = list.filter(x => x.it.found).sort((a, b) => (b.it.at || 0) - (a.it.at || 0));
   if(invFilter === 'missing') list = list.filter(x => !x.it.found);
-  if(q) list = list.filter(x => (x.it.name + ' ' + x.it.barcode + ' ' + x.it.serial).toLowerCase().includes(q));
+  if(q) list = list.filter(x => ((x.it.row || []).join(' ') + ' ' + x.it.name + ' ' + x.it.barcode + ' ' + x.it.serial).toLowerCase().includes(q));
 
   if(!has){
     invTableWrap.innerHTML = '<div class="empty-state">Список порожній — завантаж Excel/CSV</div>';
   } else if(!list.length){
     invTableWrap.innerHTML = '<div class="empty-state">Нічого не знайдено за цим фільтром</div>';
   } else {
-    const rows = list.map(({ it, i }) => `<tr class="${it.found ? 'found' : ''}">
-      <td>${escapeHtml(it.name)}</td>
-      <td>${escapeHtml(it.barcode)}</td>
-      <td>${escapeHtml(it.serial)}</td>
-      <td><button class="icon" onclick="invToggle(${i})" title="Відмітити вручну">${it.found ? '✅' : '⬜'}</button></td>
-    </tr>`).join('');
-    invTableWrap.innerHTML = `<table><thead><tr><th>Назва</th><th>ШК</th><th>Серійний №</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    const btn = (it, i) => `<td><button class="icon" onclick="invToggle(${i})" title="Відмітити вручну">${it.found ? '✅' : '⬜'}</button></td>`;
+    if(invAllCols.checked){
+      const width = Math.max((inv.headers || []).length, ...inv.items.map(it => (it.row || []).length), 3);
+      const hdr = [];
+      for(let j = 0; j < width; j++) hdr.push((inv.headers && inv.headers[j]) || ('Колонка ' + (j + 1)));
+      const rows = list.map(({ it, i }) => {
+        const cells = (it.row && it.row.length) ? it.row : [it.name, it.barcode, it.serial];
+        let tds = '';
+        for(let j = 0; j < width; j++) tds += `<td>${escapeHtml(cells[j] || '')}</td>`;
+        return `<tr class="${it.found ? 'found' : ''}">${btn(it, i)}${tds}</tr>`;
+      }).join('');
+      invTableWrap.innerHTML = `<table class="wide"><thead><tr><th></th>${hdr.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+    } else {
+      const rows = list.map(({ it, i }) => `<tr class="${it.found ? 'found' : ''}">
+        <td>${escapeHtml(it.name)}</td>
+        <td>${escapeHtml(it.barcode)}</td>
+        <td>${escapeHtml(it.serial)}</td>
+        ${btn(it, i)}
+      </tr>`).join('');
+      invTableWrap.innerHTML = `<table><thead><tr><th>Назва</th><th>ШК</th><th>Серійний №</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
   }
 
   invExtraWrap.innerHTML = inv.extras.length
-    ? `<div class="step-label" style="margin-top:12px">Не зі списку (${inv.extras.length})</div><div class="hint">${escapeHtml(inv.extras.join(', '))}</div>`
+    ? `<div class="step-label" style="margin-top:12px">Не зі списку (${inv.extras.length})</div><div class="hint">${escapeHtml(inv.extras.join(', '))}</div><div class="hint">Якщо ці коди мають бути у списку — знайди їх у таблиці вище (пошук по всіх колонках) і перевір, як вони там записані.</div>`
     : '';
 }
 
@@ -943,16 +986,22 @@ invFilterBtns.forEach(b => b.addEventListener('click', ()=>{
 }));
 
 invSearch.addEventListener('input', ()=>{ invQuery = invSearch.value; renderInv(); });
+invAllCols.addEventListener('change', renderInv);
 
 // --- звіт, копіювання, скидання ---
 invExportBtn.addEventListener('click', ()=>{
   if(typeof XLSX === 'undefined'){ showToast('Бібліотека Excel не завантажилась'); return; }
-  const rows = inv.items.map(it => ({
-    'Назва': it.name, 'Штрихкод': it.barcode, 'Серійний №': it.serial,
-    'Статус': it.found ? 'Знайдено' : 'Не знайдено'
-  }));
+  const width = Math.max((inv.headers || []).length, ...inv.items.map(it => (it.row || []).length), 3);
+  const hdr = [];
+  for(let j = 0; j < width; j++) hdr.push((inv.headers && inv.headers[j]) || ('Колонка ' + (j + 1)));
+  const aoa = [hdr.concat(['Статус'])];
+  inv.items.forEach(it => {
+    const r = ((it.row && it.row.length) ? it.row : [it.name, it.barcode, it.serial]).slice();
+    while(r.length < width) r.push('');
+    aoa.push(r.concat([it.found ? 'Знайдено' : 'Не знайдено']));
+  });
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Інвентаризація');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'Інвентаризація');
   if(inv.extras.length){
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(inv.extras.map(c => ({ 'Код (не зі списку)': c }))), 'Не зі списку');
   }
