@@ -802,14 +802,18 @@ invFileInput.addEventListener('change', ()=>{
       if(rows.length < 2){ showToast('У файлі немає даних'); return; }
       const headers = rows[0].map(c => String(c).trim());
       invParsed = { headers, rows: rows.slice(1) };
-      const iSerial = guessCol(headers, /серій|serial|s\/n|\bsn\b|imei/i, []);
+      const iSerial = guessCol(headers, /серій|заводськ|зав\.|serial|s\/n|\bsn\b|imei/i, []);
       const iBarcode = guessCol(headers, /штрих|barcode|bar code|ean|upc|sku|шк|інвент|inv/i, [iSerial]);
       const iName = guessCol(headers, /назв|модел|name|model|descr|опис|найм|товар|item|product/i, [iSerial, iBarcode]);
       fillSelect(mapName, headers, iName);
       fillSelect(mapBarcode, headers, iBarcode);
       fillSelect(mapSerial, headers, iSerial);
-      invMapBox.style.display = 'block';
-      invMapBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if(iName < 0 && iBarcode < 0 && iSerial < 0){
+        invMapBox.style.display = 'block';
+        invMapBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        mapApplyBtn.click();   // зіставлення йде по всіх колонках, тож вибір колонок не обов'язковий
+      }
     }catch(e){
       showToast('Не вдалось прочитати файл: ' + (e && e.message ? e.message : e));
     }
@@ -919,6 +923,15 @@ function handleInventoryScan(code){
   renderInv(); updateStageUI();
 }
 
+function invSearchFor(n){
+  const c = inv.extras[n];
+  if(c == null) return;
+  invQuery = c; invSearch.value = c; invFilter = 'all';
+  invFilterBtns.forEach(x => x.className = (x.dataset.invfilter === 'all' ? 'primary' : 'ghost') + ' icon');
+  renderInv();
+  invSearch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 function invToggle(i){
   const it = inv.items[i];
   if(!it) return;
@@ -975,7 +988,7 @@ function renderInv(){
   }
 
   invExtraWrap.innerHTML = inv.extras.length
-    ? `<div class="step-label" style="margin-top:12px">Не зі списку (${inv.extras.length})</div><div class="hint">${escapeHtml(inv.extras.join(', '))}</div><div class="hint">Якщо ці коди мають бути у списку — знайди їх у таблиці вище (пошук по всіх колонках) і перевір, як вони там записані.</div>`
+    ? `<div class="step-label" style="margin-top:12px">Не зі списку (${inv.extras.length})</div><div class="altrow">${inv.extras.map((c, n) => `<button class="ghost icon" onclick="invSearchFor(${n})">🔍 ${escapeHtml(c)}</button>`).join('')}</div><div class="hint">Натисни на код, щоб знайти його в таблиці вище (пошук по всіх колонках).</div>`
     : '';
 }
 
